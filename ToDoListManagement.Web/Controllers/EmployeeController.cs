@@ -1,0 +1,168 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using ToDoListManagement.Entity.Constants;
+using ToDoListManagement.Entity.Helper;
+using ToDoListManagement.Entity.ViewModel;
+using ToDoListManagement.Service.Helper;
+using ToDoListManagement.Service.Interfaces;
+
+namespace ToDoListManagement.Web.Controllers;
+
+[Authorize]
+public class EmployeeController : BaseController
+{
+    private readonly IEmployeeService _employeeService;
+    public EmployeeController(IAuthService authService, IEmployeeService employeeService) : base(authService)
+    {
+        _employeeService = employeeService;
+    }
+
+    [CustomAuthorize("Employees", "CanView")]
+    public IActionResult Index()
+    {
+        if (SessionUser == null)
+        {
+            return RedirectToAction("Login", "Auth");
+        }
+
+        return View();
+    }
+
+    [CustomAuthorize("Employees", "CanView")]
+    [HttpGet]
+    public async Task<JsonResult> GetEmployees(int draw, int start, int length, string searchValue, string sortColumn, string sortDirection)
+    {
+        int pageNumber = start / length + 1;
+        int pageSize = length;
+
+        Pagination<EmployeeViewModel>? pagination = new()
+        {
+            SearchKeyword = searchValue,
+            CurrentPage = pageNumber,
+            PageSize = pageSize,
+            SortColumn = sortColumn,
+            SortDirection = sortDirection
+        };
+
+        if (SessionUser == null)
+        {
+            return Json(new
+            {
+                draw,
+                recordsTotal = 0,
+                recordsFiltered = 0,
+                data = Array.Empty<EmployeeViewModel>()
+            });
+        }
+
+        Pagination<EmployeeViewModel>? data = await _employeeService.GetPaginatedEmployeesAsync(pagination, SessionUser);
+
+        return Json(new
+        {
+            draw,
+            recordsTotal = data.TotalRecords,
+            recordsFiltered = data.TotalRecords,
+            data = data.Items
+        });
+    }
+
+    [CustomAuthorize("Employees", "CanAddEdit")]
+    [HttpGet]
+    public IActionResult AddEmployee()
+    {
+        if (SessionUser == null)
+        {
+            return RedirectToAction("Login", "Auth");
+        }
+        return View();
+    }
+
+    [CustomAuthorize("Employees", "CanAddEdit")]
+    [HttpPost]
+    public async Task<IActionResult> AddEmployee(EmployeeViewModel employee)
+    {
+        if (ModelState.IsValid)
+        {
+            int isAdded = await _employeeService.AddEmployeeAsync(employee);
+            if(isAdded == 1)
+            {
+                TempData["SuccessMessage"] = Constants.EmployeeAddedMessage;
+            }
+            else
+            {
+                TempData["ErrorMessage"] = Constants.EmployeeAddFailedMessage;
+            }
+            
+            return RedirectToAction("Index", "Employee");
+        }
+        return View(employee);
+    }
+
+    [CustomAuthorize("Employees", "CanAddEdit")]
+    [HttpGet]
+    public async Task<IActionResult> GetEmployeeById(int employeeId)
+    {
+        if (SessionUser == null)
+        {
+            return RedirectToAction("Login", "Auth");
+        }
+
+        EditEmployeeViewModel employee = await _employeeService.GetEmployeeByIdAsync(employeeId);
+        if (employee == null)
+        {
+            return RedirectToAction("ErrorPage", "ShowError", new { statusCode = 404 });
+        }
+
+        return View("EditEmployee", employee);
+    }
+
+    [CustomAuthorize("Employees", "CanAddEdit")]
+    [HttpPost]
+    public async Task<IActionResult> UpdateEmployee(EditEmployeeViewModel employee)
+    {
+        if (ModelState.IsValid)
+        {
+            int isUpdated = await _employeeService.UpdateEmployeeAsync(employee);
+            if (isUpdated == 1)
+            {
+                TempData["SuccessMessage"] = Constants.EmployeeUpdatedMessage;
+            }
+            else if (isUpdated == -1)
+            {
+                TempData["ErrorMessage"] = Constants.EmployeeNotFoundError;
+            }
+            else
+            {
+                TempData["ErrorMessage"] = Constants.EmployeeUpdateFailedMessage;
+            }
+            return RedirectToAction("Index", "Employee");
+        }
+        return View(employee);
+    }
+
+    [CustomAuthorize("Employees", "CanDelete")]
+    [HttpGet]
+    public async Task<IActionResult> DeleteEmployee(int employeeId)
+    {
+        if (SessionUser == null)
+        {
+            return RedirectToAction("Login", "Auth");
+        }
+
+        int isDeleted = await _employeeService.DeleteEmployeeAsync(employeeId);
+        if (isDeleted == 1)
+        {
+            TempData["SuccessMessage"] = Constants.EmployeeDeletedMessage;
+        }
+        else if (isDeleted == -1)
+        {
+            TempData["ErrorMessage"] = Constants.EmployeeNotFoundError;
+        }
+        else
+        {
+            TempData["ErrorMessage"] = Constants.EmployeeDeleteFailedMessage;
+        }
+        
+        return RedirectToAction("Index", "Employee");
+    }
+}
