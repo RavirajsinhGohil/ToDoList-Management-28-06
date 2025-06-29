@@ -22,7 +22,7 @@ public class RoleService : IRoleService
         List<Role> roles = await _roleRepository.GetAllRoles();
 
         List<RoleViewModel> roleViewModels = [];
-        foreach (var role in roles)
+        foreach (Role? role in roles)
         {
             roleViewModels.Add(new()
             {

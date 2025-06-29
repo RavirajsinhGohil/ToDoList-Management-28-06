@@ -90,7 +90,10 @@ public class AuthController : BaseController
 
     public IActionResult Logout()
     {
-        _authService.LogoutUser();
+        foreach (string? cookie in Request.Cookies.Keys)
+        {
+            Response.Cookies.Delete(cookie);
+        }
         return RedirectToAction("Login", "Auth");
     }
 
@@ -124,8 +127,8 @@ public class AuthController : BaseController
                 TempData["ErrorMessage"] = Constants.EmailNotRegisteredMessage;
                 return RedirectToAction("ForgotPassword", "Auth");
             }
-            
-            string? token = await _authService.GenerateJwtToken(email, new List<System.Security.Claims.Claim>(), 1);
+
+            string? token = await _authService.GenerateJwtToken(email, [], TimeSpan.FromHours(1));
 
             string? resetUrl = Url.Action("ResetPassword", "Auth", new { token = Uri.EscapeDataString(token) }, Request.Scheme);
 
@@ -163,23 +166,20 @@ public class AuthController : BaseController
     {
         if (!string.IsNullOrEmpty(token))
         {
-            UserViewModel user = await _authService.GetUserFromToken(token);
+            UserViewModel? user = await _authService.GetUserFromToken(token);
             if (user == null)
             {
                 TempData["ErrorMessage"] = Constants.InvalidResetPasswordLinkMessage;
                 return RedirectToAction("Login", "Auth");
             }
-            else
+
+            return View(new ResetPasswordViewModel
             {
-                ResetPasswordViewModel model = new()
-                {
-                    Token = token,
-                    Email = user.Email
-                };
-                return View(model);
-            }
+                Token = token,
+                Email = user.Email
+            });
         }
-        
+
         TempData["ErrorMessage"] = Constants.InvalidResetPasswordLinkMessage;
         return RedirectToAction("Login", "Auth");
     }

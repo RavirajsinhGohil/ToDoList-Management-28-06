@@ -123,7 +123,6 @@ public class ProjectRepository : IProjectRepository
         };
     }
 
-
     public async Task<List<ProjectUser>> GetAssignedMembers(int projectId)
     {
         return await _context.ProjectUsers.Include(pu => pu.User).Where(pu => pu.ProjectId == projectId && pu.User != null && pu.User.RoleId != 1 && pu.User.RoleId != 2).ToListAsync();

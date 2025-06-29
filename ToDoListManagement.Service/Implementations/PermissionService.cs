@@ -22,7 +22,7 @@ public class PermissionService : IPermissionService
     {
         List<Permission> permissions = await _permissionRepository.GetPermissionsByRoleAsync(roleId);
         List<PermissionViewModel> permissionViewModels = [];
-        foreach(var permission in permissions)
+        foreach(Permission? permission in permissions)
         {
             permissionViewModels.Add(new() {
                 PermissionId = permission.PermissionId,
@@ -41,7 +41,7 @@ public class PermissionService : IPermissionService
     public async Task<bool> AddPermissionsAsync(int roleId, int userId)
     {
         List<Permission> permissions = [];
-        foreach(var tab in Constants.Tabs)
+        foreach(string? tab in Constants.Tabs)
         {
             permissions.Add(new() {
                 RoleId = roleId,

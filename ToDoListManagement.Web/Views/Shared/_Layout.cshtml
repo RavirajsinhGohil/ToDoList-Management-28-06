@@ -16,7 +16,7 @@
 
   Func<string, bool> hasPermissionToView = (permissionName) =>
   {
-    var permission = permissions.FirstOrDefault(p => p.PermissionName == permissionName);
+    PermissionClaim? permission = permissions.FirstOrDefault(p => p.PermissionName == permissionName);
     return permission != null && permission.CanView;
   };
 }
@@ -214,5 +214,4 @@
   </script>
 
 </body>
-
 </html>

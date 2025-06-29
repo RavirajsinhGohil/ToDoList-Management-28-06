@@ -43,8 +43,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     {
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = false,
-            ValidateAudience = false,
+            ValidateIssuer = true,
+            ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["JWT:Issuer"],
@@ -59,12 +59,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 {
                     context.Token = context.Request.Cookies["Token"];
                 }
-                return Task.CompletedTask;  
+                return Task.CompletedTask;
             },
             OnChallenge = context =>
             {
-                context.HandleResponse();
-                context.Response.Redirect("/Auth/Login");
+                bool refreshTokenExists = context.Request.Cookies.ContainsKey("RefreshToken");
+
+                if (!refreshTokenExists)
+                {
+                    context.HandleResponse();
+                    context.Response.Redirect("/Auth/Login");
+                }
+
                 return Task.CompletedTask;
             }
         };
@@ -75,21 +81,24 @@ builder.Services.AddSignalR();
 
 WebApplication? app = builder.Build();
 
-using (IServiceScope? scope = app.Services.CreateScope()) {
+using (IServiceScope? scope = app.Services.CreateScope())
+{
     IServiceProvider? services = scope.ServiceProvider;
-    ToDoListDbContext? context = services.GetRequiredService<ToDoListDbContext>(); 
+    ToDoListDbContext? context = services.GetRequiredService<ToDoListDbContext>();
     context.Database.Migrate();
 }
 
 app.UseExceptionHandler("/ErrorPages/Error");
 app.UseHsts();
-
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseStatusCodePagesWithReExecute("/ErrorPages/ShowError/{0}");
 app.UseRouting();
+
 app.UseAuthentication();
+app.UseMiddleware<JwtRefreshMiddleware>();
 app.UseAuthorization();
+
 app.MapHub<ChatHub>("/chatHub");
 
 app.MapControllerRoute(

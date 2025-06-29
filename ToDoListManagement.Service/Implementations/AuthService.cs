@@ -30,6 +30,34 @@ public class AuthService : IAuthService
         _permissionService = permissionService;
     }
 
+    public ClaimsPrincipal? ValidateJwtToken(string token)
+    {
+        try
+        {
+            JwtSecurityTokenHandler tokenHandler = new();
+            string jwtKey = _configuration["JWT:Key"] ?? throw new ArgumentNullException("JWT:Key configuration is missing.");
+
+            TokenValidationParameters validationParameters = new()
+            {
+                ValidateIssuer = true,
+                ValidIssuer = _configuration["JWT:Issuer"],
+                ValidateAudience = true,
+                ValidAudience = _configuration["JWT:Audience"],
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.Zero,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+            };
+
+            ClaimsPrincipal principal = tokenHandler.ValidateToken(token, validationParameters, out _);
+            return principal;
+        }
+        catch (SecurityTokenExpiredException)
+        {
+            return null;
+        }
+    }
+
     public async Task<bool> ValidateUserAsync(LoginViewModel model)
     {
         if (model == null || string.IsNullOrEmpty(model.Email) || string.IsNullOrEmpty(model.Password))
@@ -48,22 +76,28 @@ public class AuthService : IAuthService
 
             List<Claim>? claims =
             [
+                new Claim(ClaimTypes.Name, user.Name ?? string.Empty),
+                new Claim("UserId", user.UserId.ToString()),
                 new Claim("Permissions", permissionsJson)
             ];
-            string? token = await GenerateJwtToken(model.Email, claims, 1);
-            string? refreshToken = await GenerateJwtToken(model.Email, claims, 30);
 
-            CookieOptions? cookieToken = new()
+            string? token = await GenerateJwtToken(model.Email, claims, TimeSpan.FromHours(1));
+            string? refreshToken = await GenerateJwtToken(model.Email, claims, TimeSpan.FromDays(30));
+
+            CookieOptions? cookie = new()
             {
                 HttpOnly = true,
                 Secure = true,
                 SameSite = SameSiteMode.Strict
             };
+
             if (model.RememberMe)
             {
-                cookieToken.Expires = DateTime.Now.AddDays(30);
+                cookie.Expires = DateTime.Now.AddDays(30);
             }
-            _httpContextAccessor.HttpContext?.Response.Cookies.Append("Token", token, cookieToken);
+
+            _httpContextAccessor.HttpContext?.Response.Cookies.Append("Token", token, cookie);
+            _httpContextAccessor.HttpContext?.Response.Cookies.Append("RefreshToken", refreshToken, cookie);
 
             return true;
         }
@@ -71,6 +105,42 @@ public class AuthService : IAuthService
         {
             return false;
         }
+    }
+
+    public async Task<bool> TryRefreshAccessTokenAsync(string refreshToken)
+    {
+        ClaimsPrincipal? principal = ValidateJwtToken(refreshToken);
+        if (principal == null) return false;
+
+        string? email = principal.FindFirst(ClaimTypes.Email)?.Value;
+        if (string.IsNullOrEmpty(email)) return false;
+
+        User? user = await _authRepository.GetUserByEmailAsync(email);
+        if (user == null) return false;
+
+        List<PermissionViewModel> permissions = await _permissionService.GetPermissionsByRoleAsync(user.RoleId);
+        string permissionsJson = JsonSerializer.Serialize(permissions);
+
+        List<Claim>? claims =
+        [
+            new Claim(ClaimTypes.Name, user.Name ?? string.Empty),
+            new Claim("UserId", user.UserId.ToString()),
+            new Claim("Permissions", permissionsJson)
+        ];
+
+        string newAccessToken = await GenerateJwtToken(email, claims, TimeSpan.FromHours(1));
+        string newRefreshToken = await GenerateJwtToken(email, claims, TimeSpan.FromDays(30));
+
+        CookieOptions? cookie = new()
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict
+        };
+
+        _httpContextAccessor.HttpContext?.Response.Cookies.Append("Token", newAccessToken, cookie);
+        _httpContextAccessor.HttpContext?.Response.Cookies.Append("RefreshToken", newRefreshToken, cookie);
+        return true;
     }
 
     public async Task RefreshUserPermissionsTokenAsync(int userId)
@@ -84,10 +154,12 @@ public class AuthService : IAuthService
 
         List<Claim>? claims =
         [
+            new Claim(ClaimTypes.Name, user.Name ?? string.Empty),
+            new Claim("UserId", user.UserId.ToString()),
             new Claim("Permissions", permissionsJson)
         ];
 
-        string token = await GenerateJwtToken(user.Email ?? string.Empty , claims, 1);
+        string token = await GenerateJwtToken(user.Email ?? string.Empty, claims, TimeSpan.FromHours(1));
 
         CookieOptions? cookieOptions = new()
         {
@@ -105,7 +177,7 @@ public class AuthService : IAuthService
         return await _authRepository.CheckEmailExistsAsync(email.Trim().ToLower());
     }
 
-    public async Task<string> GenerateJwtToken(string email, List<Claim> extraClaims, int expireDays)
+    public async Task<string> GenerateJwtToken(string email, List<Claim> extraClaims, TimeSpan expiresIn)
     {
         User user = await _authRepository.GetUserByEmailAsync(email.ToLower());
 
@@ -128,7 +200,7 @@ public class AuthService : IAuthService
             issuer: _configuration["JWT:Issuer"],
             audience: _configuration["JWT:Audience"],
             claims: claims,
-            expires: DateTime.Now.AddDays(expireDays),
+            expires: DateTime.Now.Add(expiresIn),
             signingCredentials: creds);
 
         return new JwtSecurityTokenHandler().WriteToken(token);
@@ -154,44 +226,24 @@ public class AuthService : IAuthService
         return isRegistered;
     }
 
-    public void LogoutUser()
+    public async Task<UserViewModel?> GetUserFromToken(string token)
     {
-        HttpContext? context = _httpContextAccessor.HttpContext;
-        if (context != null)
-        {
-            foreach (string? cookie in context.Request.Cookies.Keys)
-            {
-                context.Response.Cookies.Delete(cookie);
-            }
-        }
-    }
+        ClaimsPrincipal? principal = ValidateJwtToken(token);
+        if (principal == null) return null;
 
-    public async Task<UserViewModel> GetUserFromToken(string token)
-    {
-        JwtSecurityTokenHandler? tokenHandler = new();
-        if (tokenHandler.CanReadToken(token))
-        {
-            JwtSecurityToken? jwtToken = tokenHandler.ReadJwtToken(token);
-            Claim? emailClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Email);
-            string email = emailClaim?.Value ?? string.Empty;
-            if (!string.IsNullOrEmpty(email))
-            {
-                User user = await _authRepository.GetUserByEmailAsync(email);
-                if (user != null)
-                {
-                    UserViewModel userViewModel = new()
-                    {
-                        Email = email,
-                        Name = user.Name,
-                        UserId = user.UserId,
-                        Role = user.Role?.RoleName
-                    };
-                    return userViewModel;
-                }
-            }
-        }
+        string? email = principal.FindFirst(ClaimTypes.Email)?.Value;
+        if (string.IsNullOrEmpty(email)) return null;
 
-        return new UserViewModel();
+        User? user = await _authRepository.GetUserByEmailAsync(email);
+        if (user == null) return null;
+
+        return new UserViewModel
+        {
+            Email = email,
+            Name = user.Name,
+            UserId = user.UserId,
+            Role = user.Role?.RoleName
+        };
     }
 
     public async Task<int?> SendResetPasswordEmailAsync(string email, string resetUrl)
